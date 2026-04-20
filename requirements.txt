@@ -17,7 +17,5 @@ scikit-learn>=1.3.0
 xgboost>=2.0.0
 lightgbm>=4.0.0
 
-# Deep learning backend for neuralforecast (CPU-only build for cloud deployment)
---extra-index-url https://download.pytorch.org/whl/cpu
+# Deep learning backend (neuralforecast manages compatible lightning/torch versions)
 torch>=2.0.0
-lightning>=2.0.0
