@@ -58,7 +58,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────
-# Constants
+# Constants & sample dataset registry
 # ──────────────────────────────────────────────────
 FREQ_MAP = {
     "Monthly (MS)":    "MS",
@@ -72,26 +72,53 @@ STATS_MODELS  = ["AutoARIMA", "AutoETS", "SeasonalNaive"]
 ML_MODELS     = ["LightGBM", "XGBoost", "RandomForest"]
 NEURAL_MODELS = ["LSTM", "GRU"]
 
-# Eight distinct blue shades for multi-model comparison charts
-PALETTE = [
-    "#1B3A6B", "#2E5FA3", "#3D74BB", "#4A7AB5",
-    "#5B8FC7", "#7AAED6", "#8DB8DE", "#B8D4ED",
-]
-
-# Per-family colours used in individual/duel plots and residuals
-FAMILY_COLORS = {
-    "stats":  "#1B3A6B",  # navy
-    "ml":     "#4A7AB5",  # mid-blue
-    "neural": "#7AAED6",  # medium-light blue (legible on white background)
+SAMPLE_DATASETS = {
+    "AirPassengers": {
+        "file":        "data/airline_passengers.csv",
+        "date_col":    "Month",
+        "target_col":  "Passengers",
+        "freq_label":  "Monthly (MS)",
+        "season":      12,
+    },
+    "US Macro Monthly": {
+        "file":        "data/US_macro_monthly.csv",
+        "date_col":    "DATE",
+        "target_col":  "CPI",
+        "freq_label":  "Monthly (MS)",
+        "season":      12,
+    },
+    "US Macro Quarterly": {
+        "file":        "data/US_macro_Quarterly.csv",
+        "date_col":    "Date",
+        "target_col":  "cpi",
+        "freq_label":  "Quarterly (QS)",
+        "season":      4,
+    },
 }
 
-METRIC_COLS   = ["MAE", "RMSE", "MAPE", "sMAPE", "MASE"]
-METRIC_FMT    = {c: ("{:.2f}%" if c in ("MAPE", "sMAPE") else "{:.3f}") for c in METRIC_COLS}
-BT_METRIC_COLS = ["MAE", "RMSE", "MAPE", "sMAPE"]   # MASE omitted in backtest (no per-window train series)
+# Eight blue shades for multi-model comparison charts (dark → light)
+PALETTE = [
+    "#1B3A6B", "#1E5FA3", "#2D7DD2", "#4A90D9",
+    "#6BAED6", "#9ECAE1", "#B8D4ED", "#0D2347",
+]
+
+# Per-family colours — navy / bright blue / light blue for clear contrast
+FAMILY_COLORS = {
+    "stats":  "#1B3A6B",  # dark navy
+    "ml":     "#2D7DD2",  # bright/saturated blue
+    "neural": "#B8D4ED",  # very light blue
+}
+
+TRAIN_LINE_COLOR = "#6B9FCE"   # slightly darker than lightest blue — visible on white
+
+METRIC_COLS    = ["MAE", "RMSE", "MAPE", "sMAPE", "MASE"]
+METRIC_FMT     = {c: ("{:.2f}%" if c in ("MAPE", "sMAPE") else "{:.3f}") for c in METRIC_COLS}
+BT_METRIC_COLS = ["MAE", "RMSE", "MAPE", "sMAPE"]
 BT_METRIC_FMT  = {c: METRIC_FMT[c] for c in BT_METRIC_COLS}
 
 
 def model_color(name: str) -> str:
+    """Return the family colour for a given model name."""
     if name in STATS_MODELS:  return FAMILY_COLORS["stats"]
     if name in ML_MODELS:     return FAMILY_COLORS["ml"]
     if name in NEURAL_MODELS: return FAMILY_COLORS["neural"]
@@ -102,13 +129,16 @@ def model_color(name: str) -> str:
 # Data helpers
 # ──────────────────────────────────────────────────
 @st.cache_data
-def load_airline():
-    df = pd.read_csv("airline_passengers.csv")
-    df.columns = ["Month", "Passengers"]
+def load_csv(filepath: str) -> pd.DataFrame:
+    """Load a CSV from disk, renaming the legacy 'Unnamed: 0' index column to 'Date'."""
+    df = pd.read_csv(filepath)
+    if "Unnamed: 0" in df.columns:
+        df = df.rename(columns={"Unnamed: 0": "Date"})
     return df
 
 
 def to_nixtla(df: pd.DataFrame, date_col: str, target_col: str, uid: str = "series_1") -> pd.DataFrame:
+    """Convert an arbitrary DataFrame to Nixtla long format (unique_id, ds, y)."""
     out = df[[date_col, target_col]].copy()
     out.columns = ["ds", "y"]
     out["ds"] = pd.to_datetime(out["ds"])
@@ -122,6 +152,7 @@ def to_nixtla(df: pd.DataFrame, date_col: str, target_col: str, uid: str = "seri
 # Model factories
 # ──────────────────────────────────────────────────
 def make_sf_models(selected, season_length):
+    """Instantiate the requested statsforecast model objects."""
     from statsforecast.models import AutoARIMA, AutoETS, SeasonalNaive
     mapping = {
         "AutoARIMA":     AutoARIMA(season_length=season_length),
@@ -132,6 +163,7 @@ def make_sf_models(selected, season_length):
 
 
 def make_ml_dict(selected):
+    """Build a dict of {model_name: sklearn estimator} for the selected ML models."""
     from sklearn.ensemble import RandomForestRegressor
     out = {}
     for m in selected:
@@ -153,6 +185,7 @@ def make_ml_dict(selected):
 
 
 def make_nf_models(selected, horizon, input_size, max_steps=50):
+    """Instantiate the requested neuralforecast model objects with shared hyperparameters."""
     from neuralforecast.losses.pytorch import MAE as NxMAE
     common = dict(
         input_size=max(input_size, 2),
@@ -178,6 +211,7 @@ def make_nf_models(selected, horizon, input_size, max_steps=50):
 # Shared helpers
 # ──────────────────────────────────────────────────
 def _date_features(freq):
+    """Return calendar date features appropriate for the given frequency."""
     return ["month"] if freq in ("MS", "M", "QS", "Q", "YS", "Y") else []
 
 
@@ -185,6 +219,7 @@ def _date_features(freq):
 # Forecast runners  (train → test evaluation)
 # ──────────────────────────────────────────────────
 def run_stats_forecast(train_df, test_df, horizon, freq, season_length, selected):
+    """Train statsforecast models on train_df and forecast h steps; evaluate against test_df."""
     from statsforecast import StatsForecast
     models = make_sf_models(selected, season_length)
     if not models:
@@ -206,6 +241,7 @@ def run_stats_forecast(train_df, test_df, horizon, freq, season_length, selected
 
 
 def run_ml_forecast(train_df, test_df, horizon, freq, season_length, selected):
+    """Train mlforecast models on train_df and forecast h steps; evaluate against test_df."""
     from mlforecast import MLForecast
     ml_dict = make_ml_dict(selected)
     if not ml_dict:
@@ -229,6 +265,7 @@ def run_ml_forecast(train_df, test_df, horizon, freq, season_length, selected):
 
 
 def run_neural_forecast(train_df, test_df, horizon, freq, season_length, selected, max_steps=50):
+    """Train neuralforecast models on train_df and forecast h steps; evaluate against test_df."""
     from neuralforecast import NeuralForecast
     input_size = min(2 * season_length, max(len(train_df) // 3, 2))
     nf_dict = make_nf_models(selected, horizon, input_size, max_steps=max_steps)
@@ -255,6 +292,7 @@ def run_neural_forecast(train_df, test_df, horizon, freq, season_length, selecte
 # Future forecast runners  (full data → true future)
 # ──────────────────────────────────────────────────
 def run_stats_future(full_df, horizon, freq, season_length, selected):
+    """Train statsforecast models on the full dataset and forecast h steps into the true future."""
     from statsforecast import StatsForecast
     models = make_sf_models(selected, season_length)
     if not models:
@@ -266,6 +304,7 @@ def run_stats_future(full_df, horizon, freq, season_length, selected):
 
 
 def run_ml_future(full_df, horizon, freq, season_length, selected):
+    """Train mlforecast models on the full dataset and forecast h steps into the true future."""
     from mlforecast import MLForecast
     ml_dict = make_ml_dict(selected)
     if not ml_dict:
@@ -279,6 +318,7 @@ def run_ml_future(full_df, horizon, freq, season_length, selected):
 
 
 def run_neural_future(full_df, horizon, freq, season_length, selected, max_steps=50):
+    """Train neuralforecast models on the full dataset and forecast h steps into the true future."""
     from neuralforecast import NeuralForecast
     input_size = min(2 * season_length, max(len(full_df) // 3, 2))
     nf_dict = make_nf_models(selected, horizon, input_size, max_steps=max_steps)
@@ -295,6 +335,7 @@ def run_neural_future(full_df, horizon, freq, season_length, selected, max_steps
 # Backtest runners
 # ──────────────────────────────────────────────────
 def run_stats_backtest(full_df, horizon, freq, season_length, selected, n_windows):
+    """Run statsforecast rolling cross-validation over n_windows backtest windows."""
     from statsforecast import StatsForecast
     models = make_sf_models(selected, season_length)
     if not models:
@@ -306,6 +347,7 @@ def run_stats_backtest(full_df, horizon, freq, season_length, selected, n_window
 
 
 def run_ml_backtest(full_df, horizon, freq, season_length, selected, n_windows):
+    """Run mlforecast rolling cross-validation over n_windows backtest windows."""
     from mlforecast import MLForecast
     ml_dict = make_ml_dict(selected)
     if not ml_dict:
@@ -318,6 +360,7 @@ def run_ml_backtest(full_df, horizon, freq, season_length, selected, n_windows):
 
 
 def run_neural_backtest(full_df, horizon, freq, season_length, selected, n_windows, max_steps=30):
+    """Run neuralforecast rolling cross-validation over n_windows backtest windows."""
     from neuralforecast import NeuralForecast
     input_size = min(2 * season_length, max(len(full_df) // (n_windows + 3), 2))
     nf_dict = make_nf_models(selected, horizon, input_size, max_steps=max_steps)
@@ -334,50 +377,70 @@ def run_neural_backtest(full_df, horizon, freq, season_length, selected, n_windo
 # ──────────────────────────────────────────────────
 st.sidebar.title("⚙️ Configuration")
 
+# ── Dataset ─────────────────────────────────────
 with st.sidebar.expander("📂 Dataset", expanded=True):
-    use_sample = st.checkbox("Use built-in sample (AirPassengers)", value=True)
-    uploaded = None
-    if not use_sample:
+    data_source = st.radio("Data source", ["Sample Dataset", "Upload CSV"],
+                           horizontal=True, key="data_source")
+
+    if data_source == "Sample Dataset":
+        dataset_name = st.selectbox("Select dataset", list(SAMPLE_DATASETS.keys()))
+        meta = SAMPLE_DATASETS[dataset_name]
+        raw_df         = load_csv(meta["file"])
+        default_date   = meta["date_col"]
+        default_target = meta["target_col"]
+        default_freq_label = meta["freq_label"]
+        default_season = meta["season"]
+    else:
         uploaded = st.file_uploader("Upload CSV", type=["csv"])
+        if uploaded is not None:
+            try:
+                raw_df = pd.read_csv(uploaded)
+                default_date   = raw_df.columns[0]
+                default_target = raw_df.columns[1]
+            except Exception as e:
+                st.error(f"Could not read CSV: {e}")
+                st.stop()
+        else:
+            st.info("Upload a CSV file to get started.")
+            st.stop()
+        default_freq_label = "Monthly (MS)"
+        default_season     = 12
 
-if use_sample:
-    raw_df = load_airline()
-    default_date, default_target = "Month", "Passengers"
-elif uploaded is not None:
-    try:
-        raw_df = pd.read_csv(uploaded)
-        default_date   = raw_df.columns[0]
-        default_target = raw_df.columns[1]
-    except Exception as e:
-        st.sidebar.error(f"Could not read CSV: {e}")
+# ── Columns ─────────────────────────────────────
+with st.sidebar.expander("📋 Columns", expanded=True):
+    all_cols = raw_df.columns.tolist()
+    num_cols = raw_df.select_dtypes(include=[np.number]).columns.tolist()
+    if not num_cols:
+        st.error("No numeric columns found. Please upload a CSV that contains at least one numeric target variable.")
         st.stop()
-else:
-    st.sidebar.info("Upload a CSV or use the sample dataset.")
-    st.stop()
-
-with st.sidebar.expander("🗂 Columns", expanded=True):
-    all_cols  = raw_df.columns.tolist()
-    num_cols  = raw_df.select_dtypes(include=[np.number]).columns.tolist()
-    date_col  = st.selectbox("Date column", all_cols,
-                              index=all_cols.index(default_date) if default_date in all_cols else 0)
+    if len(all_cols) < 2:
+        st.error("CSV must have at least two columns (a date column and a numeric target).")
+        st.stop()
+    date_col   = st.selectbox("Date column", all_cols,
+                               index=all_cols.index(default_date) if default_date in all_cols else 0)
     target_col = st.selectbox("Target variable", num_cols,
                                index=num_cols.index(default_target) if default_target in num_cols else 0)
 
+# ── Time Series Settings ─────────────────────────
 with st.sidebar.expander("📅 Time Series Settings", expanded=True):
-    freq_label    = st.selectbox("Frequency", list(FREQ_MAP.keys()), index=0)
+    freq_keys  = list(FREQ_MAP.keys())
+    freq_label = st.selectbox("Frequency", freq_keys,
+                               index=freq_keys.index(default_freq_label)
+                               if default_freq_label in freq_keys else 0)
     freq          = FREQ_MAP[freq_label]
-    season_length = int(st.number_input("Season length", 1, 365, 12, step=1))
+    season_length = int(st.number_input("Season length", 1, 365, default_season, step=1))
     horizon       = st.slider("Forecast horizon (steps)", 1, 60, 12)
     test_pct      = st.slider("Test set size (%)", 5, 40, 20)
 
-with st.sidebar.expander("🤖 Models", expanded=True):
-    st.markdown("**statsforecast** — navy")
+# ── Models ──────────────────────────────────────
+with st.sidebar.expander("🧬 Models", expanded=True):
+    st.markdown("**statsforecast**")
     sel_stats  = [m for m in STATS_MODELS  if st.checkbox(m, value=(m in ["AutoARIMA", "AutoETS"]),
                                                            key=f"s_{m}")]
-    st.markdown("**mlforecast** — mid-blue")
+    st.markdown("**mlforecast**")
     sel_ml     = [m for m in ML_MODELS     if st.checkbox(m, value=(m == "LightGBM"),
                                                            key=f"m_{m}")]
-    st.markdown("**neuralforecast** — light blue")
+    st.markdown("**neuralforecast**")
     sel_neural = [m for m in NEURAL_MODELS if st.checkbox(m, value=(m == "LSTM"),
                                                            key=f"n_{m}")]
     neural_steps = int(st.number_input(
@@ -385,6 +448,7 @@ with st.sidebar.expander("🤖 Models", expanded=True):
         help="Reduce for quicker demos; increase for better accuracy",
     ))
 
+# ── Config ──────────────────────────────────────
 with st.sidebar.expander("💾 Config", expanded=False):
     cfg = build_config(
         freq=freq, season_length=season_length, horizon=horizon, test_pct=test_pct,
@@ -405,6 +469,10 @@ with st.sidebar.expander("💾 Config", expanded=False):
             )
         except Exception as e:
             st.error(f"Invalid config file: {e}")
+
+# ── Sidebar footer ───────────────────────────────
+st.sidebar.markdown("---")
+st.sidebar.info("▶️ Head to the **Forecast** tab when you're ready to run models.")
 
 
 # ──────────────────────────────────────────────────
@@ -456,11 +524,11 @@ with tab_data:
     fig_ts = go.Figure()
     fig_ts.add_trace(go.Scatter(
         x=train_df["ds"], y=train_df["y"], name="Train",
-        line=dict(color=FAMILY_COLORS["stats"]),
+        line=dict(color=TRAIN_LINE_COLOR),
     ))
     fig_ts.add_trace(go.Scatter(
         x=test_df["ds"], y=test_df["y"], name="Test",
-        line=dict(color=FAMILY_COLORS["neural"]),
+        line=dict(color=FAMILY_COLORS["stats"]),
     ))
     fig_ts.update_layout(
         title=f"{target_col} — Train / Test Split",
@@ -553,7 +621,7 @@ with tab_fc:
                 fig_all = go.Figure()
                 fig_all.add_trace(go.Scatter(
                     x=tr_plot["ds"].iloc[-n_tail:], y=tr_plot["y"].iloc[-n_tail:],
-                    name="Train (recent)", line=dict(color="#B8D4ED", width=1),
+                    name="Train (recent)", line=dict(color=TRAIN_LINE_COLOR, width=1),
                 ))
                 fig_all.add_trace(go.Scatter(
                     x=te_plot["ds"], y=te_plot["y"],
@@ -582,7 +650,7 @@ with tab_fc:
                         fig_ind = go.Figure()
                         fig_ind.add_trace(go.Scatter(
                             x=tr_plot["ds"].iloc[-n_tail:], y=tr_plot["y"].iloc[-n_tail:],
-                            name="Train", line=dict(color="#B8D4ED", width=1),
+                            name="Train", line=dict(color=TRAIN_LINE_COLOR, width=1),
                         ))
                         fig_ind.add_trace(go.Scatter(
                             x=te_plot["ds"], y=te_plot["y"],
@@ -610,9 +678,10 @@ with tab_fc:
                         }
 
                 if resid_map:
-                    # Residuals over time
                     fig_resid = go.Figure()
-                    fig_resid.add_hline(y=0, line_dash="dot", line_color="#B8D4ED", line_width=1)
+                    # Prominent zero reference line
+                    fig_resid.add_hline(y=0, line_dash="dash",
+                                        line_color="#1B3A6B", line_width=2)
                     for mname, d in resid_map.items():
                         fig_resid.add_trace(go.Scatter(
                             x=d["ds"], y=d["res"], name=mname,
@@ -627,7 +696,6 @@ with tab_fc:
                     )
                     st.plotly_chart(fig_resid, use_container_width=True)
 
-                    # Error histogram + summary table
                     col_hist, col_summary = st.columns([3, 2])
                     with col_hist:
                         fig_hist = go.Figure()
@@ -813,8 +881,8 @@ with tab_duel:
                 opts_b  = [m for m in available if m != model_a]
                 model_b = st.selectbox("Model B", opts_b, index=0, key="duel_b")
 
-            ra  = fc_duel[model_a]
-            rb  = fc_duel[model_b]
+            ra   = fc_duel[model_a]
+            rb   = fc_duel[model_b]
             tr_d = st.session_state["fc_train"]
             te_d = st.session_state["fc_test"]
 
@@ -834,7 +902,6 @@ with tab_duel:
             </div>
             """, unsafe_allow_html=True)
 
-            # Full metrics comparison table
             st.subheader("📊 Metrics Comparison")
             cmp_df = pd.DataFrame({
                 "Metric": METRIC_COLS,
@@ -843,7 +910,6 @@ with tab_duel:
             }).set_index("Metric")
             st.dataframe(cmp_df.style.format("{:.3f}", na_rep="—"), use_container_width=True)
 
-            # Side-by-side forecast plots
             st.subheader("📈 Head-to-Head Plots")
             n_tail = min(40, len(tr_d))
             col_a_plot, col_b_plot = st.columns(2)
@@ -853,7 +919,7 @@ with tab_duel:
                     fig_d = go.Figure()
                     fig_d.add_trace(go.Scatter(
                         x=tr_d["ds"].iloc[-n_tail:], y=tr_d["y"].iloc[-n_tail:],
-                        name="Train", line=dict(color="#B8D4ED", width=1),
+                        name="Train", line=dict(color=TRAIN_LINE_COLOR, width=1),
                     ))
                     fig_d.add_trace(go.Scatter(
                         x=te_d["ds"], y=te_d["y"],
@@ -910,7 +976,7 @@ with tab_future:
                         st.error(f"mlforecast error: {e}")
 
             if sel_neural:
-                with st.spinner(f"Training neural models… (may take 30–90 s)"):
+                with st.spinner("Training neural models… (may take 30–90 s)"):
                     try:
                         future_results.update(
                             run_neural_future(nixtla_df, horizon, freq, season_length,
@@ -939,8 +1005,11 @@ with tab_future:
                     name="Historical",
                     line=dict(color="#1B3A6B", width=2),
                 ))
+                # Use string to avoid Plotly/pandas Timestamp compatibility issue
                 fig_fut.add_vline(
-                    x=last_date, line_dash="dash", line_color="#B8D4ED",
+                    x=str(last_date),
+                    line_dash="dash",
+                    line_color=TRAIN_LINE_COLOR,
                     annotation_text="Forecast start",
                     annotation_position="top left",
                     annotation_font_color="#1B3A6B",
@@ -957,7 +1026,6 @@ with tab_future:
                 )
                 st.plotly_chart(fig_fut, use_container_width=True)
 
-                # Table + download
                 fut_dfs = []
                 for mname, r in fut_res.items():
                     tmp = pd.DataFrame({"ds": r["ds"], mname: r["y_pred"]})
@@ -990,9 +1058,19 @@ with tab_about:
 ## Overview
 
 A **production-style time series forecasting tool** built on
-[Nixtla's](https://nixtla.io) open-source ecosystem. Upload any univariate CSV,
-select models from three paradigms, and explore forecasts, backtests, head-to-head
-comparisons, and true future projections.
+[Nixtla's](https://nixtla.io) open-source ecosystem. Choose from three built-in datasets
+or upload your own CSV, select models from three paradigms, and explore forecasts,
+backtests, head-to-head comparisons, and true future projections.
+
+---
+
+## Sample Datasets
+
+| Dataset | Frequency | Default Target | Observations |
+|---------|-----------|---------------|--------------|
+| **AirPassengers** | Monthly | Passengers | 144 |
+| **US Macro Monthly** | Monthly | CPI | 383 |
+| **US Macro Quarterly** | Quarterly | CPI | 203 |
 
 ---
 
@@ -1027,10 +1105,13 @@ app.py                   ← Streamlit UI + orchestration
 modules/
   evaluation.py          ← compute_metrics() — MAE, RMSE, MAPE, sMAPE, MASE
   config_manager.py      ← build_config(), parse_config_bytes()
+data/
+  airline_passengers.csv
+  US_macro_monthly.csv
+  US_macro_Quarterly.csv
 df_statsforecast.py      ← StatsforecastForecaster wrapper
 df_mlforecast.py         ← MLForecastForecaster wrapper
 df_neuralforecast.py     ← NeuralForecastForecaster wrapper
-airline_passengers.csv   ← Built-in demo dataset
 ```
 
 ---
