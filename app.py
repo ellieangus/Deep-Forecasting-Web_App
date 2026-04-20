@@ -1006,14 +1006,22 @@ with tab_future:
                     name="Historical",
                     line=dict(color="#1B3A6B", width=2),
                 ))
-                # Use string to avoid Plotly/pandas Timestamp compatibility issue
-                fig_fut.add_vline(
-                    x=str(last_date),
-                    line_dash="dash",
-                    line_color=TRAIN_LINE_COLOR,
-                    annotation_text="Forecast start",
-                    annotation_position="top left",
-                    annotation_font_color="#1B3A6B",
+                # add_vline crashes on this Plotly version with datetime axes;
+                # use add_shape + add_annotation instead
+                fig_fut.add_shape(
+                    type="line",
+                    x0=str(last_date), x1=str(last_date),
+                    y0=0, y1=1,
+                    xref="x", yref="paper",
+                    line=dict(dash="dash", color=TRAIN_LINE_COLOR, width=1.5),
+                )
+                fig_fut.add_annotation(
+                    x=str(last_date), y=1,
+                    xref="x", yref="paper",
+                    text="Forecast start",
+                    showarrow=False,
+                    yanchor="bottom",
+                    font=dict(color="#1B3A6B", size=12),
                 )
                 for i, (mname, r) in enumerate(fut_res.items()):
                     fig_fut.add_trace(go.Scatter(
