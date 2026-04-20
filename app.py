@@ -61,12 +61,13 @@ st.markdown("""
 # Constants & sample dataset registry
 # ──────────────────────────────────────────────────
 FREQ_MAP = {
-    "Monthly (MS)":    "MS",
-    "Quarterly (QS)":  "QS",
-    "Annual (YS)":     "YS",
-    "Weekly (W)":      "W",
-    "Daily (D)":       "D",
-    "Hourly (H)":      "H",
+    "Monthly (MS)":        "MS",
+    "Quarterly End (Q)":   "Q",
+    "Quarterly Start (QS)": "QS",
+    "Annual (YS)":         "YS",
+    "Weekly (W)":          "W",
+    "Daily (D)":           "D",
+    "Hourly (H)":          "H",
 }
 STATS_MODELS  = ["AutoARIMA", "AutoETS", "SeasonalNaive"]
 ML_MODELS     = ["LightGBM", "XGBoost", "RandomForest"]
@@ -91,7 +92,7 @@ SAMPLE_DATASETS = {
         "file":        "data/US_macro_Quarterly.csv",
         "date_col":    "Date",
         "target_col":  "cpi",
-        "freq_label":  "Quarterly (QS)",
+        "freq_label":  "Quarterly End (Q)",
         "season":      4,
     },
 }
@@ -212,7 +213,7 @@ def make_nf_models(selected, horizon, input_size, max_steps=50):
 # ──────────────────────────────────────────────────
 def _date_features(freq):
     """Return calendar date features appropriate for the given frequency."""
-    return ["month"] if freq in ("MS", "M", "QS", "Q", "YS", "Y") else []
+    return ["month"] if freq in ("MS", "M", "QS", "Q", "QE", "YS", "Y") else []
 
 
 # ──────────────────────────────────────────────────
